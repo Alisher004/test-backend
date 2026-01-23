@@ -54,8 +54,10 @@ DB_PORT=5432
 
 JWT_SECRET=your-very-secure-secret-key-min-32-characters
 
-# Опционально: разрешенные CORS origins (через запятую)
-ALLOWED_ORIGINS=https://yourdomain.com
+# Опционально: разрешенные CORS origins
+# "*" или "all" - разрешить все origins (по умолчанию)
+# Или конкретные домены через запятую: https://domain1.com,https://domain2.com
+ALLOWED_ORIGINS=*
 ```
 
 ## API Endpoints

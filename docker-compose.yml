@@ -36,7 +36,7 @@ services:
       DB_PORT: 5432
       JWT_SECRET: ${JWT_SECRET:-your-secret-key-change-in-production}
       NODE_ENV: ${NODE_ENV:-production}
-      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-*}
     ports:
       - "${PORT:-5001}:5001"
     depends_on:

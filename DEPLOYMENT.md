@@ -32,9 +32,10 @@ DB_PORT=5432
 # JWT Configuration
 JWT_SECRET=your-very-secure-secret-key-min-32-characters
 
-# CORS Configuration (опционально, через запятую)
-# Если не указано, используются значения по умолчанию для localhost
-ALLOWED_ORIGINS=https://yourdomain.com,https://www.yourdomain.com
+# CORS Configuration (опционально)
+# "*" или "all" - разрешить все origins (по умолчанию)
+# Или укажите конкретные домены через запятую: https://domain1.com,https://domain2.com
+ALLOWED_ORIGINS=*
 ```
 
 **Важно:** В продакшене обязательно измените:
@@ -105,7 +106,7 @@ docker-compose -f docker-compose.dev.yml logs -f
 | `DB_NAME` | Имя базы данных | okurmen_test |
 | `DB_PORT` | Порт БД | 5432 |
 | `JWT_SECRET` | Секретный ключ для JWT | - |
-| `ALLOWED_ORIGINS` | Разрешенные CORS origins (через запятую) | localhost:3000-3002 |
+| `ALLOWED_ORIGINS` | Разрешенные CORS origins ("*" для всех или через запятую) | * (все origins) |
 
 ## Полезные команды
 

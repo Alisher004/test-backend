@@ -9,23 +9,24 @@ const app = express();
 const PORT = process.env.PORT || 5001;
 
 app.use((req, res, next) => {
-  // Получаем разрешенные origins из переменных окружения или используем значения по умолчанию
+  // Получаем разрешенные origins из переменных окружения
   const allowedOriginsEnv = process.env.ALLOWED_ORIGINS;
-  const allowedOrigins = allowedOriginsEnv 
-    ? allowedOriginsEnv.split(',').map(origin => origin.trim())
-    : [
-        'http://localhost:3000',
-        'http://localhost:3001',
-        'http://localhost:3002',
-        'http://127.0.0.1:3000',
-        'http://127.0.0.1:3001',
-        'http://127.0.0.1:3002'
-      ];
-  
   const origin = req.headers.origin;
   
-  if (allowedOrigins.includes(origin)) {
-    res.setHeader('Access-Control-Allow-Origin', origin);
+  // Если ALLOWED_ORIGINS установлен в "*" или не установлен, разрешаем все origins
+  if (!allowedOriginsEnv || allowedOriginsEnv.trim() === '*' || allowedOriginsEnv.trim() === 'all') {
+    // Разрешаем все origins
+    if (origin) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+    } else {
+      res.setHeader('Access-Control-Allow-Origin', '*');
+    }
+  } else {
+    // Используем список разрешенных origins
+    const allowedOrigins = allowedOriginsEnv.split(',').map(o => o.trim());
+    if (allowedOrigins.includes(origin)) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+    }
   }
   
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
