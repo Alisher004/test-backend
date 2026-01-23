@@ -1,0 +1,18 @@
+# Dockerfile для разработки
+FROM node:18-alpine
+
+# Устанавливаем рабочую директорию
+WORKDIR /app
+
+# Копируем package.json и package-lock.json
+COPY package*.json ./
+
+# Устанавливаем все зависимости (включая dev)
+RUN npm install
+
+# Открываем порт
+EXPOSE 5001
+
+# Команда будет переопределена в docker-compose
+CMD ["npm", "run", "dev"]
+

@@ -9,14 +9,18 @@ const app = express();
 const PORT = process.env.PORT || 5001;
 
 app.use((req, res, next) => {
-  const allowedOrigins = [
-    'http://localhost:3000',
-    'http://localhost:3001',
-    'http://localhost:3002',
-    'http://127.0.0.1:3000',
-    'http://127.0.0.1:3001',
-    'http://127.0.0.1:3002'
-  ];
+  // Получаем разрешенные origins из переменных окружения или используем значения по умолчанию
+  const allowedOriginsEnv = process.env.ALLOWED_ORIGINS;
+  const allowedOrigins = allowedOriginsEnv 
+    ? allowedOriginsEnv.split(',').map(origin => origin.trim())
+    : [
+        'http://localhost:3000',
+        'http://localhost:3001',
+        'http://localhost:3002',
+        'http://127.0.0.1:3000',
+        'http://127.0.0.1:3001',
+        'http://127.0.0.1:3002'
+      ];
   
   const origin = req.headers.origin;
   
@@ -38,6 +42,15 @@ app.use((req, res, next) => {
 });
 
 app.use(express.json());
+
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.status(200).json({ 
+    status: 'ok', 
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime()
+  });
+});
 
 // Routes
 app.use('/api/auth', require('./routes/authRoutes'));
