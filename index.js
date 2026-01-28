@@ -14,24 +14,34 @@ app.use((req, res, next) => {
   const origin = req.headers.origin;
   
   // Если ALLOWED_ORIGINS установлен в "*" или не установлен, разрешаем все origins
+  // Если ALLOWED_ORIGINS не задан или стоит "*"/"all", эхо-ответим Origin (нужно для credentials)
   if (!allowedOriginsEnv || allowedOriginsEnv.trim() === '*' || allowedOriginsEnv.trim() === 'all') {
-    // Разрешаем все origins
     if (origin) {
+      // Для CORS с credentials нужно возвращать конкретный Origin, а не '*'
       res.setHeader('Access-Control-Allow-Origin', origin);
     } else {
+      // Нет Origin (вероятно запрос с сервера) — разрешаем все
       res.setHeader('Access-Control-Allow-Origin', '*');
     }
   } else {
     // Используем список разрешенных origins
     const allowedOrigins = allowedOriginsEnv.split(',').map(o => o.trim());
-    if (allowedOrigins.includes(origin)) {
+    if (origin && allowedOrigins.includes(origin)) {
       res.setHeader('Access-Control-Allow-Origin', origin);
     }
   }
   
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
-  res.setHeader('Access-Control-Allow-Credentials', 'false'); // false кылыңыз!
+  // Reflect requested headers when present (helps with varied client headers),
+  // otherwise use a safe default that includes Authorization.
+  const requestHeaders = req.headers['access-control-request-headers'];
+  if (requestHeaders) {
+    res.setHeader('Access-Control-Allow-Headers', requestHeaders);
+  } else {
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+  }
+  // Allow cookies / credentialed requests from the browser
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
   
   // Preflight request
   if (req.method === 'OPTIONS') {
