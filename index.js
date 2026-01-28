@@ -2,6 +2,7 @@
 const express = require('express');
 const dotenv = require('dotenv');
 const db = require('./config/db');
+const cors = require('cors');
 
 dotenv.config();
 
@@ -68,7 +69,7 @@ app.use('/api/admin', require('./routes/adminRoutes'));
 
 // Simple test endpoint
 app.get('/api/test', (req, res) => {
-  res.json({ message: 'API is working!', timestamp: new Date().toISOString() });
+  res.json({ message: 'API is working!00-47', timestamp: new Date().toISOString() });
 });
 
 // Get question image
