@@ -8,23 +8,25 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5001;
 
+app.use(cors({
+  origin: process.env.ALLOWED_ORIGINS?.split(',') || '*',
+  methods: ['GET','POST','PUT','DELETE','OPTIONS'],
+  allowedHeaders: ['Content-Type','Authorization','X-Requested-With'],
+  credentials: true,
+}));
+
 app.use((req, res, next) => {
-  // Получаем разрешенные origins из переменных окружения
+  // твой существующий CORS middleware без изменений
   const allowedOriginsEnv = process.env.ALLOWED_ORIGINS;
   const origin = req.headers.origin;
   
-  // Если ALLOWED_ORIGINS установлен в "*" или не установлен, разрешаем все origins
-  // Если ALLOWED_ORIGINS не задан или стоит "*"/"all", эхо-ответим Origin (нужно для credentials)
   if (!allowedOriginsEnv || allowedOriginsEnv.trim() === '*' || allowedOriginsEnv.trim() === 'all') {
     if (origin) {
-      // Для CORS с credentials нужно возвращать конкретный Origin, а не '*'
       res.setHeader('Access-Control-Allow-Origin', origin);
     } else {
-      // Нет Origin (вероятно запрос с сервера) — разрешаем все
       res.setHeader('Access-Control-Allow-Origin', '*');
     }
   } else {
-    // Используем список разрешенных origins
     const allowedOrigins = allowedOriginsEnv.split(',').map(o => o.trim());
     if (origin && allowedOrigins.includes(origin)) {
       res.setHeader('Access-Control-Allow-Origin', origin);
@@ -32,18 +34,14 @@ app.use((req, res, next) => {
   }
   
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  // Reflect requested headers when present (helps with varied client headers),
-  // otherwise use a safe default that includes Authorization.
   const requestHeaders = req.headers['access-control-request-headers'];
   if (requestHeaders) {
     res.setHeader('Access-Control-Allow-Headers', requestHeaders);
   } else {
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
   }
-  // Allow cookies / credentialed requests from the browser
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   
-  // Preflight request
   if (req.method === 'OPTIONS') {
     console.log('OPTIONS preflight request from:', origin);
     return res.status(200).end();
