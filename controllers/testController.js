@@ -183,7 +183,7 @@ const getResults = async (req, res) => {
 const getTestSettings = async (req, res) => {
   try {
     const result = await db.query(
-      'SELECT level, time_minutes as time, (SELECT COUNT(*) FROM questions WHERE level = test_settings.level AND is_active = true) as questions FROM test_settings ORDER BY level'
+      'SELECT level, time_minutes as time, (SELECT COUNT(*) FROM questions WHERE level = test_settings.level::varchar AND is_active = true) as questions FROM test_settings ORDER BY level'
     );
     
     // Transform to expected format
