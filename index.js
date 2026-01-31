@@ -4,11 +4,29 @@ const dotenv = require('dotenv');
 const db = require('./config/db');
 const cors = require('cors');
 
+// Load environment variables
 dotenv.config();
+
+// ===== CRITICAL: Validate required environment variables on startup =====
+const requiredEnvVars = ['JWT_SECRET', 'DB_HOST', 'DB_USER', 'DB_PASSWORD', 'DB_NAME', 'DB_PORT'];
+const missingEnvVars = requiredEnvVars.filter(envVar => !process.env[envVar]);
+
+if (missingEnvVars.length > 0) {
+  console.error('❌ Missing required environment variables:', missingEnvVars);
+  console.error('Please set these variables in your .env file before starting the server');
+  process.exit(1);
+}
+
+console.log('🔧 Server Configuration:');
+console.log('  Port:', process.env.PORT || 5001);
+console.log('  Environment:', process.env.NODE_ENV || 'development');
+console.log('  JWT Secret:', process.env.JWT_SECRET ? '✓ Set (' + process.env.JWT_SECRET.length + ' chars)' : '✗ Not set');
+console.log('  Database:', `${process.env.DB_HOST}/${process.env.DB_NAME}`);
 
 const app = express();
 const PORT = process.env.PORT || 5001;
 
+// CORS middleware
 app.use(cors({
   origin: process.env.ALLOWED_ORIGINS?.split(',') || '*',
   methods: ['GET','POST','PUT','DELETE','OPTIONS'],
@@ -17,7 +35,6 @@ app.use(cors({
 }));
 
 app.use((req, res, next) => {
-  // твой существующий CORS middleware без изменений
   const allowedOriginsEnv = process.env.ALLOWED_ORIGINS;
   const origin = req.headers.origin;
   
@@ -53,13 +70,38 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 
+// Request logging middleware
+app.use((req, res, next) => {
+  const timestamp = new Date().toISOString();
+  console.log(`📦 [${timestamp}] ${req.method} ${req.url}`);
+  if (process.env.NODE_ENV !== 'production') {
+    console.log('  Body:', JSON.stringify(req.body).substring(0, 200));
+  }
+  next();
+});
+
 // Health check endpoint
-app.get('/health', (req, res) => {
-  res.status(200).json({ 
-    status: 'ok', 
-    timestamp: new Date().toISOString(),
-    uptime: process.uptime()
-  });
+app.get('/health', async (req, res) => {
+  try {
+    // Check database connection
+    await db.query('SELECT 1');
+    res.status(200).json({ 
+      status: 'ok', 
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime(),
+      database: 'connected',
+      environment: process.env.NODE_ENV || 'development'
+    });
+  } catch (error) {
+    console.error('❌ Health check failed:', error.message);
+    res.status(503).json({ 
+      status: 'unhealthy', 
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime(),
+      database: 'disconnected',
+      error: error.message
+    });
+  }
 });
 
 // Routes
@@ -69,7 +111,11 @@ app.use('/api/admin', require('./routes/adminRoutes'));
 
 // Simple test endpoint
 app.get('/api/test', (req, res) => {
-  res.json({ message: 'API is working!00-47', timestamp: new Date().toISOString() });
+  res.json({ 
+    message: 'API is working!31', 
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV || 'development'
+  });
 });
 
 // Get question image
@@ -113,7 +159,58 @@ app.get('/api/questions/:id/image', async (req, res) => {
   }
 });
 
+// 404 handler
+app.use((req, res) => {
+  res.status(404).json({ error: 'Endpoint not found', path: req.url });
+});
+
+// Global error handler
+app.use((err, req, res, next) => {
+  console.error('❌ Unhandled error:', err.message);
+  console.error('Stack:', err.stack);
+  res.status(500).json({ error: 'Internal server error' });
+});
+
+// Graceful shutdown handling
+const gracefulShutdown = async (signal) => {
+  console.log(`\n🛑 Received ${signal}. Starting graceful shutdown...`);
+  
+  try {
+    // Close database pool
+    console.log('🔄 Closing database connections...');
+    await db.pool.end();
+    console.log('✅ Database connections closed');
+    
+    // Close server
+    console.log('🔄 Shutting down server...');
+    process.exit(0);
+  } catch (error) {
+    console.error('❌ Error during shutdown:', error.message);
+    process.exit(1);
+  }
+};
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+// Start server
 app.listen(PORT, () => {
   console.log(`🚀 Server started on port ${PORT}`);
-  console.log(`📡 Test endpoint: http://localhost:${PORT}/api/test`);
+  // console.log(`📡 Test endpoint: http://localhost:${PORT}/api/test`);
+  console.log(`🏥 Health check: http://localhost:${PORT}/health`);
+  console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log('─'.repeat(50));
+});
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (err) => {
+  console.error('❌ Uncaught Exception:', err.message);
+  console.error(err.stack);
+  gracefulShutdown('uncaughtException');
+});
+
+// Handle unhandled promise rejections
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('❌ Unhandled Rejection at:', promise);
+  console.error('Reason:', reason);
 });
