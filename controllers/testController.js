@@ -1,4 +1,6 @@
-const db = require('../config/db');
+const Question = require('../models/questionModel');
+const Result = require('../models/resultModel');
+const TestSettings = require('../models/testSettingsModel');
 
 const getQuestions = async (req, res) => {
   try {
@@ -6,35 +8,44 @@ const getQuestions = async (req, res) => {
     const lang = req.query.lang || 'ru';
 
     // Get test time from settings
-    const settingsResult = await db.query(
-      'SELECT time_minutes FROM test_settings WHERE level = $1',
-      [level]
-    );
-    
-    const timeMinutes = settingsResult.rows[0]?.time_minutes || 20;
+    const settings = await TestSettings.findOne({ level });
+    const timeMinutes = settings?.time_minutes || 20;
 
-    // Get all active questions for this level (no limit - use all available questions)
-    const result = await db.query(
-      `SELECT id, 
-              level, 
-              type,
-              ${lang === 'kg' ? 'question_kg as question' : 'question_ru as question'},
-              ${lang === 'kg' ? 'options_kg as options' : 'options_ru as options'},
-              correct_answer,
-              CASE WHEN image_file IS NOT NULL THEN CONCAT('/api/questions/', id, '/image') ELSE NULL END as image_url,
-              image_filename
-       FROM questions 
-       WHERE level = $1 AND is_active = true 
-       ORDER BY RANDOM()`,
-      [level]
-    );
+    // Get all active questions for this level
+    const questions = await Question.find({ level, is_active: true })
+      .select('level type question_ru question_kg options_ru options_kg image_file image_filename')
+      .lean();
 
-    const questions = result.rows.map(q => {
+    const processedQuestions = questions.map(q => {
       const { correct_answer, ...question } = q;
+      
+      // Map language fields
+      if (lang === 'kg') {
+        question.question = q.question_kg;
+        question.options = q.options_kg;
+      } else {
+        question.question = q.question_ru;
+        question.options = q.options_ru;
+      }
+      
+      // Add image URL if image exists
+      if (q.image_file) {
+        question.image_url = `/api/questions/${q._id}/image`;
+        question.image_filename = q.image_filename;
+      } else {
+        question.image_url = null;
+      }
+      
+      delete question.question_ru;
+      delete question.question_kg;
+      delete question.options_ru;
+      delete question.options_kg;
+      delete question.image_file;
+      
       return question;
     });
 
-    res.json({ questions, timeMinutes });
+    res.json({ questions: processedQuestions, timeMinutes });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Server error' });
@@ -46,12 +57,8 @@ const submitTest = async (req, res) => {
     const { userId, level, answers, startTime } = req.body;
 
     // Get test time from settings
-    const settingsResult = await db.query(
-      'SELECT time_minutes FROM test_settings WHERE level = $1',
-      [level]
-    );
-    
-    const testTime = settingsResult.rows[0]?.time_minutes || 20;
+    const settings = await TestSettings.findOne({ level });
+    const testTime = settings?.time_minutes || 20;
 
     // Check if time expired
     const currentTime = Date.now();
@@ -60,34 +67,40 @@ const submitTest = async (req, res) => {
       return res.status(400).json({ error: 'Время теста истекло' });
     }
 
-    const existingResult = await db.query(
-      'SELECT * FROM results WHERE user_id = $1 AND level = $2',
-      [userId, level]
-    );
-
-    if (existingResult.rows.length > 0) {
+    // Check if test already taken for this level
+    const existingResult = await Result.findOne({ user_id: userId, level });
+    if (existingResult) {
       return res.status(400).json({ error: 'Тест уже пройден для этого уровня' });
     }
 
-    const questionsResult = await db.query(
-      'SELECT id, correct_answer, type FROM questions WHERE level = $1 AND is_active = true',
-      [level]
-    );
+    // Get all questions for this level
+    const questions = await Question.find({ level, is_active: true }).lean();
+    const questionsMap = {};
+    questions.forEach(q => {
+      questionsMap[q._id.toString()] = q;
+    });
 
-    const questions = questionsResult.rows;
     const totalQuestions = questions.length;
-    
     let correctCount = 0;
+    let scoredQuestions = 0; // Only count logic/reading questions for scoring
     
     answers.forEach(answer => {
-      const question = questions.find(q => q.id === answer.questionId);
-      if (question && answer.answer === question.correct_answer) {
-        correctCount++;
+      const question = questionsMap[answer.questionId];
+      if (question) {
+        // Skip motivational questions in scoring (they don't have a correct answer)
+        if (question.type === 'motivational') {
+          return; // Skip this answer
+        }
+        scoredQuestions++;
+        if (answer.answer === question.correct_answer) {
+          correctCount++;
+        }
       }
     });
 
-    const percentage = totalQuestions > 0 
-      ? Math.round((correctCount / totalQuestions) * 100) 
+    // Calculate percentage based on scored questions only
+    const percentage = scoredQuestions > 0 
+      ? Math.round((correctCount / scoredQuestions) * 100) 
       : 0;
 
     let colorLevel = '';
@@ -95,13 +108,18 @@ const submitTest = async (req, res) => {
     else if (percentage <= 70) colorLevel = 'medium';
     else colorLevel = 'high';
 
-    const result = await db.query(
-      `INSERT INTO results 
-       (user_id, level, score, percentage, color_level, answers, completed_at) 
-       VALUES ($1, $2, $3, $4, $5, $6, NOW()) 
-       RETURNING *`,
-      [userId, level, correctCount, percentage, colorLevel, JSON.stringify(answers)]
-    );
+    const result = await Result.create({
+      user_id: userId,
+      level,
+      score: correctCount,
+      percentage,
+      color_level: colorLevel,
+      answers: answers.map(a => ({
+        questionId: a.questionId,
+        answer: a.answer
+      })),
+      completed_at: new Date()
+    });
 
     res.json({
       message: 'Test submitted successfully',
@@ -124,18 +142,12 @@ const getResults = async (req, res) => {
   try {
     const { userId } = req.params;
 
-    const result = await db.query(
-      `SELECT r.*, u.full_name, u.phone_number,
-       (SELECT COUNT(*) FROM questions WHERE level = r.level AND is_active = true) as total_questions
-       FROM results r
-       JOIN users u ON r.user_id = u.id
-       WHERE r.user_id = $1
-       ORDER BY r.completed_at DESC`,
-      [userId]
-    );
+    const results = await Result.find({ user_id: userId })
+      .sort({ completed_at: -1 })
+      .lean();
 
     // Process each result to include detailed answers
-    const processedResults = await Promise.all(result.rows.map(async (row) => {
+    const processedResults = await Promise.all(results.map(async (row) => {
       let answers = [];
 
       if (row.answers && Array.isArray(row.answers)) {
@@ -143,14 +155,11 @@ const getResults = async (req, res) => {
         const questionIds = row.answers.map(a => a.questionId);
 
         if (questionIds.length > 0) {
-          const questionsResult = await db.query(
-            'SELECT id, question_ru, question_kg, correct_answer FROM questions WHERE id = ANY($1)',
-            [questionIds]
-          );
+          const questions = await Question.find({ _id: { $in: questionIds } }).lean();
 
           const questionsMap = {};
-          questionsResult.rows.forEach(q => {
-            questionsMap[q.id] = q;
+          questions.forEach(q => {
+            questionsMap[q._id.toString()] = q;
           });
 
           answers = row.answers.map(answer => {
@@ -166,9 +175,12 @@ const getResults = async (req, res) => {
         }
       }
 
+      // Get total questions for this level
+      const totalQuestions = await Question.countDocuments({ level: row.level, is_active: true });
+
       return {
         ...row,
-        total_questions: answers.length,
+        total_questions: answers.length || totalQuestions,
         answers
       };
     }));
@@ -182,20 +194,19 @@ const getResults = async (req, res) => {
 
 const getTestSettings = async (req, res) => {
   try {
-    const result = await db.query(
-      'SELECT level, time_minutes as time, (SELECT COUNT(*) FROM questions WHERE level = test_settings.level::varchar AND is_active = true) as questions FROM test_settings ORDER BY level'
-    );
+    const settings = await TestSettings.find().lean();
     
     // Transform to expected format
-    const settings = {};
-    result.rows.forEach(row => {
-      settings[row.level] = {
-        questions: parseInt(row.questions),
-        time: row.time
+    const settingsObj = {};
+    for (const row of settings) {
+      const totalQuestions = await Question.countDocuments({ level: row.level, is_active: true });
+      settingsObj[row.level] = {
+        questions: totalQuestions,
+        time: row.time_minutes
       };
-    });
+    }
     
-    res.json(settings);
+    res.json(settingsObj);
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Server error' });
@@ -203,3 +214,4 @@ const getTestSettings = async (req, res) => {
 };
 
 module.exports = { getQuestions, submitTest, getResults, getTestSettings };
+
