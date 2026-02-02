@@ -1,25 +1,24 @@
 version: '3.8'
 
 services:
-  # PostgreSQL база данных
-  postgres:
-    image: postgres:15-alpine
-    container_name: okurmen_postgres
+  # MongoDB база данных
+  mongodb:
+    image: mongo:7.0
+    container_name: okurmen_mongodb
     environment:
-      POSTGRES_USER: ${DB_USER:-postgres}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
-      POSTGRES_DB: ${DB_NAME:-okurmen_test}
+      MONGO_INITDB_DATABASE: ${MONGO_DB_NAME:-okurmen_test}
     ports:
-      - "${DB_PORT:-5432}:5432"
+      - "${MONGO_PORT:-27017}:27017"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - mongodb_data:/data/db
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}"]
+      test: ["CMD-SHELL", "echo 'db.runCommand(\"ping\").ok' | mongosh --quiet || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
     networks:
       - okurmen_network
+    restart: unless-stopped
 
   # Node.js приложение
   backend:
@@ -29,18 +28,14 @@ services:
     container_name: okurmen_backend
     environment:
       PORT: ${PORT:-5001}
-      DB_HOST: postgres
-      DB_USER: ${DB_USER:-postgres}
-      DB_PASSWORD: ${DB_PASSWORD:-postgres}
-      DB_NAME: ${DB_NAME:-okurmen_test}
-      DB_PORT: 5432
+      MONGO_URI: ${MONGO_URI:-mongodb://mongodb:27017/okurmen_test}
       JWT_SECRET: ${JWT_SECRET:-your-secret-key-change-in-production}
       NODE_ENV: ${NODE_ENV:-production}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-*}
     ports:
       - "${PORT:-5001}:5001"
     depends_on:
-      postgres:
+      mongodb:
         condition: service_healthy
     # В продакшене не монтируем код, используем образ
     # volumes:
@@ -57,7 +52,7 @@ services:
     restart: unless-stopped
 
 volumes:
-  postgres_data:
+  mongodb_data:
     driver: local
 
 networks:

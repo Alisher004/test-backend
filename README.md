@@ -14,16 +14,11 @@ Backend сервер для системы тестирования Окурме
 
 2. **Запустите приложение:**
    ```bash
-   # Продакшен
+   # Используйте скрипт развертывания
    ./deploy.sh
    
    # Или вручную
    docker-compose up -d --build
-   
-   # Разработка
-   ./deploy.sh dev
-   # Или
-   docker-compose -f docker-compose.dev.yml up --build
    ```
 
 3. **Проверьте работу:**
@@ -33,7 +28,7 @@ Backend сервер для системы тестирования Окурме
 
 ### Без Docker
 
-1. Установите PostgreSQL и создайте базу данных
+1. Установите MongoDB и запустите сервис
 2. Установите зависимости: `npm install`
 3. Создайте `.env` файл с настройками БД
 4. Запустите: `npm start` или `npm run dev`
@@ -46,11 +41,10 @@ Backend сервер для системы тестирования Окурме
 PORT=5001
 NODE_ENV=production
 
-DB_HOST=postgres
-DB_USER=postgres
-DB_PASSWORD=your-secure-password
-DB_NAME=okurmen_test
-DB_PORT=5432
+# MongoDB Configuration
+MONGO_URI=mongodb://localhost:27017/okurmen_test
+# Для Docker используйте: mongodb://mongodb:27017/okurmen_test
+# Для production с аутентификацией: mongodb://username:password@host:27017/database?authSource=admin
 
 JWT_SECRET=your-very-secure-secret-key-min-32-characters
 
@@ -80,10 +74,6 @@ ALLOWED_ORIGINS=*
 └── package.json     # Зависимости
 ```
 
-## Документация
-
-Подробная документация по развертыванию: [DEPLOYMENT.md](./DEPLOYMENT.md)
-
 ## Разработка
 
 ```bash
@@ -91,7 +81,7 @@ ALLOWED_ORIGINS=*
 npm run dev
 
 # Или с Docker
-docker-compose -f docker-compose.dev.yml up
+docker-compose up
 ```
 
 ## Лицензия
