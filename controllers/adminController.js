@@ -1,22 +1,21 @@
-const db = require('../config/db');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const User = require('../models/userModel');
+const Question = require('../models/questionModel');
+const Result = require('../models/resultModel');
+const Admin = require('../models/adminModel');
+const TestSettings = require('../models/testSettingsModel');
 
 const adminLogin = async (req, res) => {
   try {
     const { email, password } = req.body;
 
     // Find admin
-    const result = await db.query(
-      'SELECT * FROM admins WHERE email = $1',
-      [email]
-    );
+    const admin = await Admin.findOne({ email });
 
-    if (result.rows.length === 0) {
+    if (!admin) {
       return res.status(400).json({ error: 'Неверные учетные данные' });
     }
-
-    const admin = result.rows[0];
 
     // Check password
     const validPassword = await bcrypt.compare(password, admin.password);
@@ -44,37 +43,52 @@ const adminLogin = async (req, res) => {
 // Dashboard Statistics
 const getDashboardStats = async (req, res) => {
   try {
-    const [usersResult, questionsResult, resultsResult] = await Promise.all([
-      db.query('SELECT COUNT(*) as count FROM users'),
-      db.query('SELECT COUNT(*) as count FROM questions WHERE is_active = true'),
-      db.query('SELECT COUNT(*) as count FROM results'),
+    const [
+      usersCount,
+      questionsCount,
+      resultsCount,
+      avgScoreResult,
+      levelDistribution,
+      recentResults
+    ] = await Promise.all([
+      User.countDocuments(),
+      Question.countDocuments({ is_active: true }),
+      Result.countDocuments(),
+      Result.aggregate([
+        { $match: { percentage: { $gt: 0 } } },
+        { $group: { _id: null, avg_score: { $avg: '$percentage' } } }
+      ]),
+      Result.aggregate([
+        { $group: { _id: '$color_level', count: { $sum: 1 } } }
+      ]),
+      Result.find()
+        .sort({ completed_at: -1 })
+        .limit(10)
+        .populate('user_id', 'full_name phone_number')
+        .lean()
     ]);
 
-    const avgScoreResult = await db.query(
-      'SELECT AVG(percentage) as avg_score FROM results WHERE percentage > 0'
-    );
+    const levelDistObj = {};
+    levelDistribution.forEach(item => {
+      levelDistObj[item._id] = item.count;
+    });
 
-    const levelDistribution = await db.query(`
-      SELECT color_level, COUNT(*) as count 
-      FROM results 
-      GROUP BY color_level
-    `);
-
-    const recentResults = await db.query(`
-      SELECT r.*, u.full_name, u.phone_number 
-      FROM results r
-      JOIN users u ON r.user_id = u.id
-      ORDER BY r.completed_at DESC 
-      LIMIT 10
-    `);
+    const recentResultsFormatted = recentResults.map(r => ({
+      ...r,
+      user_id: undefined,
+      user: r.user_id ? {
+        full_name: r.user_id.full_name,
+        phone_number: r.user_id.phone_number
+      } : null
+    }));
 
     res.json({
-      totalUsers: parseInt(usersResult.rows[0].count),
-      totalQuestions: parseInt(questionsResult.rows[0].count),
-      totalTests: parseInt(resultsResult.rows[0].count),
-      avgScore: Math.round(avgScoreResult.rows[0].avg_score || 0),
-      levelDistribution: levelDistribution.rows,
-      recentResults: recentResults.rows,
+      totalUsers: usersCount,
+      totalQuestions: questionsCount,
+      totalTests: resultsCount,
+      avgScore: Math.round(avgScoreResult[0]?.avg_score || 0),
+      levelDistribution: levelDistObj,
+      recentResults: recentResultsFormatted,
     });
   } catch (error) {
     console.error('Dashboard stats error:', error);
@@ -85,10 +99,10 @@ const getDashboardStats = async (req, res) => {
 // Questions Management
 const getAllQuestions = async (req, res) => {
   try {
-    const result = await db.query(
-      'SELECT * FROM questions ORDER BY created_at DESC'
-    );
-    res.json(result.rows);
+    const questions = await Question.find()
+      .sort({ created_at: -1 })
+      .lean();
+    res.json(questions);
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Server error' });
@@ -99,30 +113,42 @@ const createQuestion = async (req, res) => {
   try {
     const { level, type, question_ru, question_kg, options_ru, options_kg, correct_answer } = req.body;
 
-    // Parse options if they are JSON strings
-    let parsedOptionsRu = options_ru;
-    let parsedOptionsKg = options_kg;
+    console.log('Received question data:', { level, type, question_ru, question_kg, correct_answer, options_ru, options_kg });
+
+    // Parse options if they are JSON strings (only for logic type)
+    let parsedOptionsRu = [];
+    let parsedOptionsKg = [];
     
-    if (typeof options_ru === 'string') {
-      try {
-        parsedOptionsRu = JSON.parse(options_ru);
-      } catch (e) {
-        parsedOptionsRu = null;
+    if (type === 'logic' && options_ru) {
+      if (typeof options_ru === 'string') {
+        try {
+          parsedOptionsRu = JSON.parse(options_ru);
+        } catch (e) {
+          console.log('Failed to parse options_ru:', options_ru);
+          parsedOptionsRu = [];
+        }
+      } else if (Array.isArray(options_ru)) {
+        parsedOptionsRu = options_ru;
       }
     }
     
-    if (typeof options_kg === 'string') {
-      try {
-        parsedOptionsKg = JSON.parse(options_kg);
-      } catch (e) {
-        parsedOptionsKg = null;
+    if (type === 'logic' && options_kg) {
+      if (typeof options_kg === 'string') {
+        try {
+          parsedOptionsKg = JSON.parse(options_kg);
+        } catch (e) {
+          console.log('Failed to parse options_kg:', options_kg);
+          parsedOptionsKg = [];
+        }
+      } else if (Array.isArray(options_kg)) {
+        parsedOptionsKg = options_kg;
       }
     }
 
-    // Validate based on question type
+    // Validate based on question type - only logic questions require options
     if (type === 'logic') {
-      if (!parsedOptionsRu || !parsedOptionsKg || parsedOptionsRu.length < 2 || parsedOptionsKg.length < 2) {
-        return res.status(400).json({ error: 'Logic questions require at least 2 options' });
+      if (parsedOptionsRu.length < 2 || parsedOptionsKg.length < 2) {
+        return res.status(400).json({ error: 'Logic questions require at least 2 options in each language' });
       }
     }
 
@@ -135,30 +161,42 @@ const createQuestion = async (req, res) => {
       imageFilename = req.file.originalname;
     }
 
-    const result = await db.query(
-      `INSERT INTO questions 
-       (level, type, question_ru, question_kg, options_ru, options_kg, correct_answer, image_file, image_filename) 
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) 
-       RETURNING *`,
-      [
-        level, 
-        type, 
-        question_ru, 
-        question_kg, 
-        type === 'logic' ? JSON.stringify(parsedOptionsRu) : null,
-        type === 'logic' ? JSON.stringify(parsedOptionsKg) : null,
-        correct_answer,
-        imageFile,
-        imageFilename
-      ]
-    );
+    const questionData = {
+      level,
+      type,
+      question_ru,
+      question_kg,
+      image_file: imageFile,
+      image_filename: imageFilename
+    };
+
+    // Set correct_answer - use 'N/A' for motivational questions if empty
+    if (correct_answer && correct_answer.trim() !== '') {
+      questionData.correct_answer = correct_answer;
+    } else if (type === 'motivational' || type === 'reading') {
+      questionData.correct_answer = 'N/A';
+    } else {
+      return res.status(400).json({ error: 'Correct answer is required' });
+    }
+
+    // Only add options for logic questions
+    if (type === 'logic') {
+      questionData.options_ru = parsedOptionsRu;
+      questionData.options_kg = parsedOptionsKg;
+    }
+
+    const question = await Question.create(questionData);
 
     res.status(201).json({
       message: 'Question created successfully',
-      question: result.rows[0]
+      question: question.toJSON()
     });
   } catch (error) {
     console.error('Create question error:', error);
+    if (error.name === 'ValidationError') {
+      console.error('Validation errors:', error.errors);
+      return res.status(400).json({ error: error.message, details: error.errors });
+    }
     res.status(500).json({ error: 'Server error: ' + error.message });
   }
 };
@@ -166,70 +204,90 @@ const createQuestion = async (req, res) => {
 const updateQuestion = async (req, res) => {
   try {
     const { id } = req.params;
+    
+    // Validate MongoDB ObjectId
+    if (!id || id === 'undefined' || !id.match(/^[0-9a-fA-F]{24}$/)) {
+      return res.status(400).json({ error: 'Invalid question ID: ' + id });
+    }
+
     const { level, type, question_ru, question_kg, options_ru, options_kg, correct_answer } = req.body;
 
     // Parse options if they are JSON strings
-    let parsedOptionsRu = options_ru;
-    let parsedOptionsKg = options_kg;
+    let parsedOptionsRu = [];
+    let parsedOptionsKg = [];
     
-    if (typeof options_ru === 'string') {
-      try {
-        parsedOptionsRu = JSON.parse(options_ru);
-      } catch (e) {
-        parsedOptionsRu = null;
+    if (options_ru) {
+      if (typeof options_ru === 'string') {
+        try {
+          parsedOptionsRu = JSON.parse(options_ru);
+        } catch (e) {
+          console.log('Failed to parse options_ru:', options_ru);
+          parsedOptionsRu = [];
+        }
+      } else if (Array.isArray(options_ru)) {
+        parsedOptionsRu = options_ru;
       }
     }
     
-    if (typeof options_kg === 'string') {
-      try {
-        parsedOptionsKg = JSON.parse(options_kg);
-      } catch (e) {
-        parsedOptionsKg = null;
+    if (options_kg) {
+      if (typeof options_kg === 'string') {
+        try {
+          parsedOptionsKg = JSON.parse(options_kg);
+        } catch (e) {
+          console.log('Failed to parse options_kg:', options_kg);
+          parsedOptionsKg = [];
+        }
+      } else if (Array.isArray(options_kg)) {
+        parsedOptionsKg = options_kg;
       }
     }
 
     // Handle image upload
-    let imageFile = null;
-    let imageFilename = null;
+    let updateData = {
+      level,
+      type,
+      question_ru,
+      question_kg,
+      updated_at: new Date()
+    };
+
+    // Set correct_answer - use 'N/A' for motivational/reading questions if empty
+    if (correct_answer && correct_answer.trim() !== '') {
+      updateData.correct_answer = correct_answer;
+    } else if (type === 'motivational' || type === 'reading') {
+      updateData.correct_answer = 'N/A';
+    }
+    // For logic type, if empty, we let Mongoose validation handle it (will error if truly empty)
+
+    if (type === 'logic') {
+      updateData.options_ru = parsedOptionsRu;
+      updateData.options_kg = parsedOptionsKg;
+    }
     
     if (req.file) {
-      imageFile = req.file.buffer;
-      imageFilename = req.file.originalname;
+      updateData.image_file = req.file.buffer;
+      updateData.image_filename = req.file.originalname;
     }
 
-    const result = await db.query(
-      `UPDATE questions 
-       SET level = $1, type = $2, question_ru = $3, question_kg = $4, 
-           options_ru = $5, options_kg = $6, correct_answer = $7, 
-           image_file = COALESCE($8, image_file), 
-           image_filename = COALESCE($9, image_filename),
-           updated_at = NOW()
-       WHERE id = $10 
-       RETURNING *`,
-      [
-        level, 
-        type, 
-        question_ru, 
-        question_kg, 
-        type === 'logic' ? JSON.stringify(parsedOptionsRu) : null,
-        type === 'logic' ? JSON.stringify(parsedOptionsKg) : null,
-        correct_answer,
-        imageFile,
-        imageFilename,
-        id
-      ]
+    const question = await Question.findByIdAndUpdate(
+      id,
+      updateData,
+      { new: true, runValidators: true }
     );
 
-    if (result.rows.length === 0) {
+    if (!question) {
       return res.status(404).json({ error: 'Question not found' });
     }
 
     res.json({
       message: 'Question updated successfully',
-      question: result.rows[0]
+      question: question.toJSON()
     });
   } catch (error) {
     console.error(error);
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({ error: error.message });
+    }
     res.status(500).json({ error: 'Server error' });
   }
 };
@@ -238,18 +296,15 @@ const deleteQuestion = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const result = await db.query(
-      'DELETE FROM questions WHERE id = $1 RETURNING id',
-      [id]
-    );
+    const question = await Question.findByIdAndDelete(id);
 
-    if (result.rows.length === 0) {
+    if (!question) {
       return res.status(404).json({ error: 'Question not found' });
     }
 
     res.json({ 
       message: 'Question deleted successfully',
-      deletedId: result.rows[0].id
+      deletedId: id
     });
   } catch (error) {
     console.error(error);
@@ -260,63 +315,25 @@ const deleteQuestion = async (req, res) => {
 // Test History
 const getTestHistory = async (req, res) => {
   try {
-    const result = await db.query(
-      `SELECT r.*, u.full_name, u.phone_number as email,
-       (SELECT COUNT(*) FROM questions WHERE level = r.level AND is_active = true) as total_questions
-       FROM results r
-       JOIN users u ON r.user_id = u.id
-       ORDER BY r.completed_at DESC`
-    );
-    res.json(result.rows);
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: 'Server error' });
-  }
-};
+    const results = await Result.find()
+      .sort({ completed_at: -1 })
+      .populate('user_id', 'full_name phone_number')
+      .lean();
 
-// Users Management
-const getAllUsers = async (req, res) => {
-  try {
-    const result = await db.query(
-      `SELECT id, full_name, phone_number as email, age, 'user' as role, created_at 
-       FROM users 
-       ORDER BY created_at DESC`
-    );
-    res.json(result.rows);
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: 'Server error' });
-  }
-};
-
-// Results Management
-const getAllResults = async (req, res) => {
-  try {
-    const result = await db.query(
-      `SELECT r.*, u.full_name, u.phone_number as email,
-       (SELECT COUNT(*) FROM questions WHERE level = r.level AND is_active = true) as total_questions
-       FROM results r
-       JOIN users u ON r.user_id = u.id
-       ORDER BY r.completed_at DESC`
-    );
-
-    // Process each result to include detailed answers
-    const processedResults = await Promise.all(result.rows.map(async (row) => {
+    const processedResults = await Promise.all(results.map(async (row) => {
+      const totalQuestions = await Question.countDocuments({ level: row.level, is_active: true });
+      
       let answers = [];
       
       if (row.answers && Array.isArray(row.answers)) {
-        // Get question details for each answer
         const questionIds = row.answers.map(a => a.questionId);
         
         if (questionIds.length > 0) {
-          const questionsResult = await db.query(
-            'SELECT id, question_ru, question_kg, correct_answer FROM questions WHERE id = ANY($1)',
-            [questionIds]
-          );
+          const questions = await Question.find({ _id: { $in: questionIds } }).lean();
           
           const questionsMap = {};
-          questionsResult.rows.forEach(q => {
-            questionsMap[q.id] = q;
+          questions.forEach(q => {
+            questionsMap[q._id.toString()] = q;
           });
           
           answers = row.answers.map(answer => {
@@ -334,7 +351,95 @@ const getAllResults = async (req, res) => {
       
       return {
         ...row,
-        total_questions: answers.length,
+        user_id: undefined,
+        user: row.user_id ? {
+          full_name: row.user_id.full_name,
+          phone_number: row.user_id.phone_number
+        } : null,
+        total_questions: answers.length || totalQuestions,
+        answers
+      };
+    }));
+
+    res.json(processedResults);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Server error' });
+  }
+};
+
+// Users Management
+const getAllUsers = async (req, res) => {
+  try {
+    const users = await User.find()
+      .sort({ created_at: -1 })
+      .select('full_name phone_number age created_at')
+      .lean();
+
+    const formattedUsers = users.map(u => ({
+      id: u._id,
+      full_name: u.full_name,
+      phone_number: u.phone_number,
+      email: u.phone_number, // For compatibility
+      age: u.age,
+      role: 'user',
+      created_at: u.created_at
+    }));
+
+    res.json(formattedUsers);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Server error' });
+  }
+};
+
+// Results Management
+const getAllResults = async (req, res) => {
+  try {
+    const results = await Result.find()
+      .sort({ completed_at: -1 })
+      .populate('user_id', 'full_name phone_number')
+      .lean();
+
+    // Process each result to include detailed answers
+    const processedResults = await Promise.all(results.map(async (row) => {
+      let answers = [];
+      
+      if (row.answers && Array.isArray(row.answers)) {
+        const questionIds = row.answers.map(a => a.questionId);
+        
+        if (questionIds.length > 0) {
+          const questions = await Question.find({ _id: { $in: questionIds } }).lean();
+          
+          const questionsMap = {};
+          questions.forEach(q => {
+            questionsMap[q._id.toString()] = q;
+          });
+          
+          answers = row.answers.map(answer => {
+            const question = questionsMap[answer.questionId];
+            return {
+              question_id: answer.questionId,
+              question_text_ru: question ? question.question_ru : 'Вопрос не найден',
+              question_text_kg: question ? question.question_kg : 'Суроо табылган жок',
+              given_answer: answer.answer,
+              correct_answer: question ? question.correct_answer : 'N/A'
+            };
+          });
+        }
+      }
+      
+      const totalQuestions = await Question.countDocuments({ level: row.level, is_active: true });
+      
+      return {
+        ...row,
+        user_id: undefined,
+        user: row.user_id ? {
+          full_name: row.user_id.full_name,
+          phone_number: row.user_id.phone_number,
+          email: row.user_id.phone_number
+        } : null,
+        total_questions: answers.length || totalQuestions,
         answers
       };
     }));
@@ -349,10 +454,8 @@ const getAllResults = async (req, res) => {
 // Test Settings Management
 const getTestSettings = async (req, res) => {
   try {
-    const result = await db.query(
-      'SELECT * FROM test_settings ORDER BY level'
-    );
-    res.json(result.rows);
+    const settings = await TestSettings.find().lean();
+    res.json(settings);
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Server error' });
@@ -377,19 +480,13 @@ const updateTestSettings = async (req, res) => {
         return res.status(400).json({ error: `Invalid data for level ${level}: time_minutes must be a number between 1 and 300` });
       }
 
-      const result = await db.query(
-        `UPDATE test_settings 
-         SET time_minutes = $1, updated_at = NOW()
-         WHERE level = $2 
-         RETURNING *`,
-        [time_minutes, level]
+      const result = await TestSettings.findOneAndUpdate(
+        { level },
+        { time_minutes, updated_at: new Date() },
+        { new: true, upsert: true, runValidators: true }
       );
 
-      if (result.rows.length === 0) {
-        return res.status(404).json({ error: `Test setting for level ${level} not found` });
-      }
-
-      updatedSettings.push(result.rows[0]);
+      updatedSettings.push(result);
     }
 
     res.json({
@@ -398,6 +495,9 @@ const updateTestSettings = async (req, res) => {
     });
   } catch (error) {
     console.error('Update test settings error:', error);
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({ error: error.message });
+    }
     res.status(500).json({ error: 'Server error: ' + error.message });
   }
 };
@@ -415,3 +515,4 @@ module.exports = {
   getTestSettings,
   updateTestSettings,
 };
+

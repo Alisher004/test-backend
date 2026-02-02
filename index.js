@@ -1,14 +1,14 @@
-// backend/index.js
 const express = require('express');
 const dotenv = require('dotenv');
-const db = require('./config/db');
+const { mongoose, isConnected } = require('./config/db');
 const cors = require('cors');
+const Question = require('./models/questionModel');
 
 // Load environment variables
 dotenv.config();
 
 // ===== CRITICAL: Validate required environment variables on startup =====
-const requiredEnvVars = ['JWT_SECRET', 'DB_HOST', 'DB_USER', 'DB_PASSWORD', 'DB_NAME', 'DB_PORT'];
+const requiredEnvVars = ['JWT_SECRET', 'MONGO_URI'];
 const missingEnvVars = requiredEnvVars.filter(envVar => !process.env[envVar]);
 
 if (missingEnvVars.length > 0) {
@@ -21,52 +21,38 @@ console.log('🔧 Server Configuration:');
 console.log('  Port:', process.env.PORT || 5001);
 console.log('  Environment:', process.env.NODE_ENV || 'development');
 console.log('  JWT Secret:', process.env.JWT_SECRET ? '✓ Set (' + process.env.JWT_SECRET.length + ' chars)' : '✗ Not set');
-console.log('  Database:', `${process.env.DB_HOST}/${process.env.DB_NAME}`);
+console.log('  Database:', process.env.MONGO_URI ? 'MongoDB configured' : 'Using default MongoDB URI');
 
 const app = express();
 const PORT = process.env.PORT || 5001;
 
-// CORS middleware
+// CORS middleware - must be first middleware
+const allowedOriginsEnv = process.env.ALLOWED_ORIGINS;
+
 app.use(cors({
-  origin: process.env.ALLOWED_ORIGINS?.split(',') || '*',
-  methods: ['GET','POST','PUT','DELETE','OPTIONS'],
-  allowedHeaders: ['Content-Type','Authorization','X-Requested-With'],
+  origin: function(origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    
+    if (!allowedOriginsEnv || allowedOriginsEnv.trim() === '*' || allowedOriginsEnv.trim() === 'all') {
+      return callback(null, true);
+    }
+    
+    const allowedOrigins = allowedOriginsEnv.split(',').map(o => o.trim());
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+    
+    return callback(null, false);
+  },
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Access-Control-Allow-Headers'],
   credentials: true,
+  optionsSuccessStatus: 200
 }));
 
-app.use((req, res, next) => {
-  const allowedOriginsEnv = process.env.ALLOWED_ORIGINS;
-  const origin = req.headers.origin;
-  
-  if (!allowedOriginsEnv || allowedOriginsEnv.trim() === '*' || allowedOriginsEnv.trim() === 'all') {
-    if (origin) {
-      res.setHeader('Access-Control-Allow-Origin', origin);
-    } else {
-      res.setHeader('Access-Control-Allow-Origin', '*');
-    }
-  } else {
-    const allowedOrigins = allowedOriginsEnv.split(',').map(o => o.trim());
-    if (origin && allowedOrigins.includes(origin)) {
-      res.setHeader('Access-Control-Allow-Origin', origin);
-    }
-  }
-  
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  const requestHeaders = req.headers['access-control-request-headers'];
-  if (requestHeaders) {
-    res.setHeader('Access-Control-Allow-Headers', requestHeaders);
-  } else {
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
-  }
-  res.setHeader('Access-Control-Allow-Credentials', 'true');
-  
-  if (req.method === 'OPTIONS') {
-    console.log('OPTIONS preflight request from:', origin);
-    return res.status(200).end();
-  }
-  
-  next();
-});
+// Handle preflight OPTIONS requests explicitly
+app.options('*', cors());
 
 app.use(express.json());
 
@@ -83,22 +69,33 @@ app.use((req, res, next) => {
 // Health check endpoint
 app.get('/health', async (req, res) => {
   try {
-    // Check database connection
-    await db.query('SELECT 1');
-    res.status(200).json({ 
-      status: 'ok', 
-      timestamp: new Date().toISOString(),
-      uptime: process.uptime(),
-      database: 'connected',
-      environment: process.env.NODE_ENV || 'development'
-    });
+    // Check MongoDB connection
+    const mongoConnected = isConnected() && mongoose.connection.readyState === 1;
+    
+    if (mongoConnected) {
+      res.status(200).json({ 
+        status: 'ok', 
+        timestamp: new Date().toISOString(),
+        uptime: process.uptime(),
+        database: 'connected',
+        environment: process.env.NODE_ENV || 'development'
+      });
+    } else {
+      res.status(503).json({ 
+        status: 'unhealthy', 
+        timestamp: new Date().toISOString(),
+        uptime: process.uptime(),
+        database: 'disconnected',
+        error: 'MongoDB not connected'
+      });
+    }
   } catch (error) {
     console.error('❌ Health check failed:', error.message);
     res.status(503).json({ 
       status: 'unhealthy', 
       timestamp: new Date().toISOString(),
       uptime: process.uptime(),
-      database: 'disconnected',
+      database: 'error',
       error: error.message
     });
   }
@@ -112,7 +109,7 @@ app.use('/api/admin', require('./routes/adminRoutes'));
 // Simple test endpoint
 app.get('/api/test', (req, res) => {
   res.json({ 
-    message: 'API is working!31', 
+    message: 'API is working!', 
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV || 'development'
   });
@@ -123,19 +120,26 @@ app.get('/api/questions/:id/image', async (req, res) => {
   try {
     const { id } = req.params;
     console.log('Getting image for question:', id);
-    const result = await db.query('SELECT image_file, image_filename FROM questions WHERE id = $1', [id]);
     
-    if (result.rows.length === 0) {
+    // Validate MongoDB ObjectId
+    if (!id.match(/^[0-9a-fA-F]{24}$/)) {
+      console.log('Invalid question ID format');
+      return res.status(400).json({ error: 'Invalid question ID format' });
+    }
+    
+    const question = await Question.findById(id).select('image_file image_filename');
+    
+    if (!question) {
       console.log('Question not found');
       return res.status(404).json({ error: 'Question not found' });
     }
     
-    if (!result.rows[0].image_file) {
+    if (!question.image_file) {
       console.log('No image file');
       return res.status(404).json({ error: 'Image not found' });
     }
     
-    const { image_file, image_filename } = result.rows[0];
+    const { image_file, image_filename } = question;
     console.log('Image found, size:', image_file.length, 'filename:', image_filename);
     
     // Determine content type based on file extension
@@ -176,9 +180,9 @@ const gracefulShutdown = async (signal) => {
   console.log(`\n🛑 Received ${signal}. Starting graceful shutdown...`);
   
   try {
-    // Close database pool
+    // Close MongoDB connection
     console.log('🔄 Closing database connections...');
-    await db.pool.end();
+    await mongoose.connection.close();
     console.log('✅ Database connections closed');
     
     // Close server
@@ -196,7 +200,6 @@ process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 // Start server
 app.listen(PORT, () => {
   console.log(`🚀 Server started on port ${PORT}`);
-  // console.log(`📡 Test endpoint: http://localhost:${PORT}/api/test`);
   console.log(`🏥 Health check: http://localhost:${PORT}/health`);
   console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log('─'.repeat(50));
@@ -214,3 +217,4 @@ process.on('unhandledRejection', (reason, promise) => {
   console.error('❌ Unhandled Rejection at:', promise);
   console.error('Reason:', reason);
 });
+

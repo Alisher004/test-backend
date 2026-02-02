@@ -8,6 +8,7 @@
     "dev": "nodemon index.js"
   },
   "dependencies": {
+    "bcrypt": "^6.0.0",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.6",
     "dotenv": "^16.0.3",
@@ -15,8 +16,8 @@
     "express-validator": "^7.0.1",
     "iconv-lite": "^0.7.2",
     "jsonwebtoken": "^9.0.0",
-    "multer": "^2.0.2",
-    "pg": "^8.11.0"
+    "mongoose": "^8.22.0",
+    "multer": "^2.0.2"
   },
   "devDependencies": {
     "nodemon": "^3.0.1"
