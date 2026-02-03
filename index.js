@@ -36,21 +36,17 @@ const app = express();
 app.use(express.json());
 
 // ===== CORS =====
-const allowedOriginsEnv = process.env.ALLOWED_ORIGINS || '*';
-const allowedOrigins = allowedOriginsEnv === '*' 
-  ? ['*'] 
-  : allowedOriginsEnv.split(',').map(o => o.trim());
+const allowedOriginsEnv = (process.env.ALLOWED_ORIGINS || '').split(',').map(o => o.trim());
 
 app.use(cors({
   origin: function(origin, callback) {
     if (!origin) return callback(null, true); // Postman, curl
-    if (allowedOriginsEnv === '*' || allowedOrigins.includes(origin)) return callback(null, true);
-    // Allow localhost for development
-    if (origin.includes('localhost')) return callback(null, true);
+    if (allowedOriginsEnv.includes(origin)) return callback(null, true);
     return callback(new Error('Not allowed by CORS'));
   },
   credentials: true
 }));
+
 app.options('*', cors());
 
 // ===== Routes =====
