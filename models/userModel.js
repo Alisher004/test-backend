@@ -31,9 +31,6 @@ const userSchema = new mongoose.Schema({
   }
 });
 
-// Index for faster lookups
-userSchema.index({ phone_number: 1 });
-
 const User = mongoose.model('User', userSchema);
 
 module.exports = User;

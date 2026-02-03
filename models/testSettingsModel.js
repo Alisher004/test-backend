@@ -25,9 +25,6 @@ const testSettingsSchema = new mongoose.Schema({
   }
 });
 
-// Index for faster lookups
-testSettingsSchema.index({ level: 1 });
-
 const TestSettings = mongoose.model('TestSettings', testSettingsSchema);
 
 module.exports = TestSettings;

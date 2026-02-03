@@ -27,6 +27,8 @@ const options = {
   maxPoolSize: 10, // Maximum number of connections in the pool
   serverSelectionTimeoutMS: 5000, // Timeout for server selection
   socketTimeoutMS: 45000, // Socket timeout
+  // SSL/TLS options for MongoDB Atlas
+  ssl: true,
 };
 
 // Track connection status

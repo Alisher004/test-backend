@@ -3,18 +3,19 @@ const bcrypt = require("bcryptjs");
 const Admin = require("../models/adminModel");
 
 mongoose
-  .connect("mongodb://localhost:27017/okurmen_test")
+  .connect(process.env.MONGO_URI || "mongodb://localhost:27017/okurmen_test")
   .then(async () => {
-    const hashedPassword = await bcrypt.hash("okurmen123", 10);
+    const email = "admin@example.com";
 
-    // Use new Admin() + save() instead of Admin.create()
-    const admin = new Admin({
-      email: "admin@example.com",
-      password: hashedPassword,
-    });
-    
+    // Эски админ бар болсо өчүрүү
+    await Admin.deleteMany({ email });
+
+    const hashedPassword = await bcrypt.hash("okurmen123", 10);
+    const admin = new Admin({ email, password: hashedPassword });
+
     await admin.save();
-    console.log("Админ кошулду:", admin.email);
+    console.log("✅ Админ кошулду:", admin.email);
+
     await mongoose.disconnect();
     process.exit(0);
   })
