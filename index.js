@@ -1,113 +1,82 @@
 const express = require('express');
 const dotenv = require('dotenv');
 const cors = require('cors');
-const { mongoose, isConnected } = require('./config/db');
-const Question = require('./models/questionModel');
+const mongoose = require('mongoose');
+const bcrypt = require('bcryptjs');
+const Admin = require('./models/adminModel');
 
-// Load environment variables
+// Load .env
 dotenv.config();
 
-// ===== Check required environment variables =====
-const requiredEnvVars = ['JWT_SECRET', 'MONGO_URI'];
-const missingEnvVars = requiredEnvVars.filter(envVar => !process.env[envVar]);
+// ===== Config =====
+const PORT = process.env.PORT || 5001;
+const MONGO_URI = process.env.MONGO_URI;
+const JWT_SECRET = process.env.JWT_SECRET;
 
-if (missingEnvVars.length > 0) {
-  console.error('❌ Missing required environment variables:', missingEnvVars);
-  console.error('Please set these variables in your .env file before starting the server');
+if (!MONGO_URI || !JWT_SECRET) {
+  console.error('❌ Missing environment variables MONGO_URI or JWT_SECRET');
   process.exit(1);
 }
 
-const PORT = process.env.PORT || 5001;
-console.log('🔧 Server config:', {
-  port: PORT,
-  environment: process.env.NODE_ENV || 'development',
-  jwtSecret: process.env.JWT_SECRET ? '✓ Set' : '✗ Not set',
-  database: process.env.MONGO_URI ? 'MongoDB configured' : 'No URI'
-});
+// ===== Connect MongoDB =====
+mongoose.connect(MONGO_URI)
+  .then(() => console.log('✅ MongoDB connected'))
+  .catch(err => {
+    console.error('❌ MongoDB connection error:', err.message);
+    process.exit(1);
+  });
 
+// ===== Express App =====
 const app = express();
+app.use(express.json());
 
 // ===== CORS =====
-const allowedOriginsEnv = process.env.ALLOWED_ORIGINS || '*';
+const allowedOrigins = process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim());
+
 app.use(cors({
   origin: function(origin, callback) {
     if (!origin) return callback(null, true); // Postman, curl
-    if (allowedOriginsEnv === '*' || allowedOriginsEnv.toLowerCase() === 'all') return callback(null, true);
-    const allowedOrigins = allowedOriginsEnv.split(',').map(o => o.trim());
     if (allowedOrigins.includes(origin)) return callback(null, true);
     return callback(new Error('Not allowed by CORS'));
   },
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Access-Control-Allow-Headers'],
-  optionsSuccessStatus: 200
+  credentials: true
 }));
-
-// Preflight requests
 app.options('*', cors());
 
-// ===== Middlewares =====
-app.use(express.json());
-
-// Request logging
-app.use((req, res, next) => {
-  const timestamp = new Date().toISOString();
-  console.log(`📦 [${timestamp}] ${req.method} ${req.url}`);
-  if (process.env.NODE_ENV !== 'production' && req.body) {
-    console.log('  Body:', JSON.stringify(req.body).substring(0, 200));
-  }
-  next();
-});
-
-// ===== Health Check =====
-app.get('/health', async (req, res) => {
-  try {
-    const mongoConnected = isConnected() && mongoose.connection.readyState === 1;
-    if (mongoConnected) {
-      return res.status(200).json({ status: 'ok', timestamp: new Date(), uptime: process.uptime(), database: 'connected', environment: process.env.NODE_ENV || 'development' });
-    }
-    res.status(503).json({ status: 'unhealthy', timestamp: new Date(), uptime: process.uptime(), database: 'disconnected', error: 'MongoDB not connected' });
-  } catch (error) {
-    console.error('❌ Health check failed:', error);
-    res.status(503).json({ status: 'unhealthy', timestamp: new Date(), uptime: process.uptime(), database: 'error', error: error.message });
-  }
-});
-
 // ===== Routes =====
-app.use('/api/auth', require('./routes/authRoutes'));
-app.use('/api/test', require('./routes/testRoutes'));
-app.use('/api/admin', require('./routes/adminRoutes'));
 
-// Test endpoint
-app.get('/api/test', (req, res) => res.json({ message: 'API is working!', timestamp: new Date(), environment: process.env.NODE_ENV || 'development' }));
+// Health check
+app.get('/health', (req, res) => {
+  const mongoConnected = mongoose.connection.readyState === 1;
+  res.json({
+    status: mongoConnected ? 'ok' : 'unhealthy',
+    database: mongoConnected ? 'connected' : 'disconnected',
+    timestamp: new Date()
+  });
+});
 
-// Get question image
-app.get('/api/questions/:id/image', async (req, res) => {
+// Admin login
+app.post('/api/admin/login', async (req, res) => {
   try {
-    const { id } = req.params;
-    if (!id.match(/^[0-9a-fA-F]{24}$/)) return res.status(400).json({ error: 'Invalid question ID format' });
-    const question = await Question.findById(id).select('image_file image_filename');
-    if (!question || !question.image_file) return res.status(404).json({ error: 'Image not found' });
+    const { email, password } = req.body;
+    if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
 
-    let contentType = 'image/jpeg';
-    if (question.image_filename) {
-      const ext = question.image_filename.split('.').pop().toLowerCase();
-      if (ext === 'png') contentType = 'image/png';
-      else if (ext === 'gif') contentType = 'image/gif';
-      else if (ext === 'webp') contentType = 'image/webp';
-    }
+    const admin = await Admin.findOne({ email });
+    if (!admin) return res.status(400).json({ error: 'Неверные учетные данные' });
 
-    res.setHeader('Content-Type', contentType);
-    res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(question.image_filename)}`);
-    res.end(question.image_file);
-  } catch (error) {
-    console.error('Error serving image:', error);
-    res.status(500).json({ error: 'Server error' });
+    const match = await bcrypt.compare(password, admin.password);
+    if (!match) return res.status(400).json({ error: 'Неверные учетные данные' });
+
+    // Login success (тут можно токен кошуу)
+    res.json({ message: 'Login successful', email: admin.email });
+  } catch (err) {
+    console.error('Admin login error:', err);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-// ===== 404 handler =====
-app.use((req, res) => res.status(404).json({ error: 'Endpoint not found', path: req.url }));
+// ===== 404 =====
+app.use((req, res) => res.status(404).json({ error: 'Endpoint not found' }));
 
 // ===== Global error handler =====
 app.use((err, req, res, next) => {
@@ -115,33 +84,7 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Internal server error' });
 });
 
-// ===== Graceful shutdown =====
-const gracefulShutdown = async (signal) => {
-  console.log(`🛑 Received ${signal}, shutting down...`);
-  try {
-    await mongoose.connection.close();
-    console.log('✅ MongoDB connections closed');
-    process.exit(0);
-  } catch (error) {
-    console.error('❌ Shutdown error:', error.message);
-    process.exit(1);
-  }
-};
-
-process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-process.on('SIGINT', () => gracefulShutdown('SIGINT'));
-process.on('uncaughtException', (err) => {
-  console.error('❌ Uncaught Exception:', err.message);
-  console.error(err.stack);
-  gracefulShutdown('uncaughtException');
-});
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('❌ Unhandled Rejection at:', promise, 'Reason:', reason);
-});
-
 // ===== Start Server =====
 app.listen(PORT, () => {
-  console.log(`🚀 Server started on port ${PORT}`);
-  console.log(`🏥 Health check: http://localhost:${PORT}/health`);
-  console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`🚀 Server running on port ${PORT}`);
 });
