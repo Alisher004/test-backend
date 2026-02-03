@@ -31,7 +31,10 @@ const app = express();
 app.use(express.json());
 
 // ===== CORS =====
-const allowedOrigins = process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim());
+const allowedOrigins = [
+  'http://localhost:3000',                  // локал
+  'https://okurmen-test-taupe.vercel.app'  // Vercel фронтенд
+];
 
 app.use(cors({
   origin: function(origin, callback) {
