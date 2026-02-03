@@ -38,25 +38,21 @@ app.use(express.json());
 // ===== CORS =====
 const cors = require('cors');
 
-const allowedOriginsEnv = process.env.ALLOWED_ORIGINS || '';
-const allowedOrigins = allowedOriginsEnv.split(',').map(o => o.trim());
+const allowedOrigins = [
+  'http://localhost:3000',
+  'https://okurmen-test-taupe.vercel.app'
+];
 
 app.use(cors({
   origin: function(origin, callback) {
-    // origin жок болсо (Postman, curl) өтсүн
-    if (!origin) return callback(null, true);
-
-    // ALLOWED_ORIGINS ичинде болсо өтсүн
+    if (!origin) return callback(null, true); // Postman, curl
     if (allowedOrigins.includes(origin)) return callback(null, true);
-
-    // башкача болсо токтот
     return callback(new Error('Not allowed by CORS'));
   },
   credentials: true,
   optionsSuccessStatus: 200
 }));
 
-// Preflight requests (OPTIONS)
 app.options('*', cors());
 
 // ===== Routes =====
