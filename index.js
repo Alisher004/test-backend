@@ -45,15 +45,14 @@ const allowedOrigins = [
 
 app.use(cors({
   origin: function(origin, callback) {
-    if (!origin) return callback(null, true); // Postman, curl
+    if (!origin) return callback(null, true); // curl / Postman
     if (allowedOrigins.includes(origin)) return callback(null, true);
     return callback(new Error('Not allowed by CORS'));
   },
-  credentials: true,
-  optionsSuccessStatus: 200
+  credentials: true // бул withCredentials үчүн керек
 }));
 
-app.options('*', cors());
+app.options('*', cors({ credentials: true }));
 
 // ===== Routes =====
 // Health check
