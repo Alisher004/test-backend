@@ -1,20 +1,25 @@
+// index.js
 const express = require('express');
 const dotenv = require('dotenv');
 const cors = require('cors');
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
-const Admin = require('./models/adminModel');
+const jwt = require('jsonwebtoken');
 
-// Load .env
+// Load env
 dotenv.config();
 
-// ===== Config =====
+// Models
+const Admin = require('./models/adminModel');
+const User = require('./models/userModel'); // Эгер колдонуучу керек болсо
+
+// Config
 const PORT = process.env.PORT || 5001;
 const MONGO_URI = process.env.MONGO_URI;
 const JWT_SECRET = process.env.JWT_SECRET;
 
 if (!MONGO_URI || !JWT_SECRET) {
-  console.error('❌ Missing environment variables MONGO_URI or JWT_SECRET');
+  console.error('❌ Missing MONGO_URI or JWT_SECRET in .env');
   process.exit(1);
 }
 
@@ -47,7 +52,6 @@ app.use(cors({
 app.options('*', cors());
 
 // ===== Routes =====
-
 // Health check
 app.get('/health', (req, res) => {
   const mongoConnected = mongoose.connection.readyState === 1;
@@ -56,6 +60,26 @@ app.get('/health', (req, res) => {
     database: mongoConnected ? 'connected' : 'disconnected',
     timestamp: new Date()
   });
+});
+
+// Admin register (тест үчүн, productionда жок кылса болот)
+app.post('/api/admin/register', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
+
+    const exists = await Admin.findOne({ email });
+    if (exists) return res.status(400).json({ error: 'Admin already exists' });
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const admin = new Admin({ email, password: hashedPassword });
+    await admin.save();
+
+    res.status(201).json({ message: 'Admin created', email: admin.email });
+  } catch (err) {
+    console.error('Admin register error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
 // Admin login
@@ -70,8 +94,10 @@ app.post('/api/admin/login', async (req, res) => {
     const match = await bcrypt.compare(password, admin.password);
     if (!match) return res.status(400).json({ error: 'Неверные учетные данные' });
 
-    // Login success (тут можно токен кошуу)
-    res.json({ message: 'Login successful', email: admin.email });
+    // Token example
+    const token = jwt.sign({ id: admin._id, email: admin.email }, JWT_SECRET, { expiresIn: '1d' });
+
+    res.json({ message: 'Login successful', email: admin.email, token });
   } catch (err) {
     console.error('Admin login error:', err);
     res.status(500).json({ error: 'Internal server error' });
@@ -81,13 +107,7 @@ app.post('/api/admin/login', async (req, res) => {
 // ===== 404 =====
 app.use((req, res) => res.status(404).json({ error: 'Endpoint not found' }));
 
-// ===== Global error handler =====
-app.use((err, req, res, next) => {
-  console.error('❌ Unhandled error:', err.message);
-  res.status(500).json({ error: 'Internal server error' });
-});
-
-// ===== Start Server =====
+// ===== Start server =====
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
