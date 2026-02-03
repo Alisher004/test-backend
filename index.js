@@ -36,15 +36,17 @@ const app = express();
 app.use(express.json());
 
 // ===== CORS =====
-const allowedOrigins = [
-  'http://localhost:3000',
-  'https://okurmen-test-taupe.vercel.app'
-];
+const allowedOriginsEnv = process.env.ALLOWED_ORIGINS || '*';
+const allowedOrigins = allowedOriginsEnv === '*' 
+  ? ['*'] 
+  : allowedOriginsEnv.split(',').map(o => o.trim());
 
 app.use(cors({
   origin: function(origin, callback) {
     if (!origin) return callback(null, true); // Postman, curl
-    if (allowedOrigins.includes(origin)) return callback(null, true);
+    if (allowedOriginsEnv === '*' || allowedOrigins.includes(origin)) return callback(null, true);
+    // Allow localhost for development
+    if (origin.includes('localhost')) return callback(null, true);
     return callback(new Error('Not allowed by CORS'));
   },
   credentials: true
@@ -60,26 +62,6 @@ app.get('/health', (req, res) => {
     database: mongoConnected ? 'connected' : 'disconnected',
     timestamp: new Date()
   });
-});
-
-// Admin register (тест үчүн, productionда жок кылса болот)
-app.post('/api/admin/register', async (req, res) => {
-  try {
-    const { email, password } = req.body;
-    if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
-
-    const exists = await Admin.findOne({ email });
-    if (exists) return res.status(400).json({ error: 'Admin already exists' });
-
-    const hashedPassword = await bcrypt.hash(password, 10);
-    const admin = new Admin({ email, password: hashedPassword });
-    await admin.save();
-
-    res.status(201).json({ message: 'Admin created', email: admin.email });
-  } catch (err) {
-    console.error('Admin register error:', err);
-    res.status(500).json({ error: 'Internal server error' });
-  }
 });
 
 // Admin login

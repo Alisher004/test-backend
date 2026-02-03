@@ -1,21 +1,19 @@
 const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs");
-const Admin = require("../models/adminModel");
+const Admin = require("../models/adminModel"); // модель жолун текшер
 
 mongoose
-  .connect(process.env.MONGO_URI || "mongodb://localhost:27017/okurmen_test")
+  .connect(process.env.MONGO_URI || "mongodb+srv://alisermanasov00_db_user:9tENPqoFBCPbY57F@cluster1.xmwvnzs.mongodb.net/?appName=Cluster1")
   .then(async () => {
-    const email = "admin@example.com";
+    const hashedPassword = await bcrypt.hash("okurmen2021", 10);
 
-    // Эски админ бар болсо өчүрүү
-    await Admin.deleteMany({ email });
-
-    const hashedPassword = await bcrypt.hash("okurmen123", 10);
-    const admin = new Admin({ email, password: hashedPassword });
+    const admin = new Admin({
+      email: "admin@okurmen.kg",
+      password: hashedPassword,
+    });
 
     await admin.save();
-    console.log("✅ Админ кошулду:", admin.email);
-
+    console.log("Админ кошулду:", admin.email);
     await mongoose.disconnect();
     process.exit(0);
   })
