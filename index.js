@@ -36,17 +36,27 @@ const app = express();
 app.use(express.json());
 
 // ===== CORS =====
-const allowedOriginsEnv = (process.env.ALLOWED_ORIGINS || '').split(',').map(o => o.trim());
+const cors = require('cors');
+
+const allowedOriginsEnv = process.env.ALLOWED_ORIGINS || '';
+const allowedOrigins = allowedOriginsEnv.split(',').map(o => o.trim());
 
 app.use(cors({
   origin: function(origin, callback) {
-    if (!origin) return callback(null, true); // Postman, curl
-    if (allowedOriginsEnv.includes(origin)) return callback(null, true);
+    // origin жок болсо (Postman, curl) өтсүн
+    if (!origin) return callback(null, true);
+
+    // ALLOWED_ORIGINS ичинде болсо өтсүн
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+
+    // башкача болсо токтот
     return callback(new Error('Not allowed by CORS'));
   },
-  credentials: true
+  credentials: true,
+  optionsSuccessStatus: 200
 }));
 
+// Preflight requests (OPTIONS)
 app.options('*', cors());
 
 // ===== Routes =====
